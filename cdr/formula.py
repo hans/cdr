@@ -733,6 +733,42 @@ class Formula(object):
                         )
                         new_subterms.append(new)
                 terms.append(new_subterms)
+            elif t.func.id == "CVarOnset":
+                assert not under_irf
+                assert len(t.args) == 3, "CVarOnset terms take two arguments"
+                event_axis, expr, irf_family = t.args
+                event_axis = event_axis.id
+
+                if under_interaction:
+                    raise NotImplementedError()
+
+                subterms = []
+                self.process_ast(
+                    expr,
+                    terms=subterms,
+                    has_intercept=has_intercept,
+                    rangf=rangf,
+                    impulses_by_name=impulses_by_name,
+                    interactions_by_name=interactions_by_name,
+                    under_irf=True,
+                    under_interaction=under_interaction
+                )
+                new_subterms = []
+                nn_inputs = sum(subterms, [])
+                for S in subterms:
+                    for s in S:
+                        new = self.process_irf(
+                            irf_family,
+                            input_irf=s,
+                            ops=None,
+                            variable_onset=event_axis,
+                            rangf=rangf,
+                            nn_inputs=nn_inputs,
+                            impulses_by_name=impulses_by_name,
+                            interactions_by_name=interactions_by_name,
+                        )
+                        new_subterms.append(new)
+                terms.append(new_subterms)
             elif t.func.id == 'NN':
                 assert len(t.args) == 1, 'NN transforms take exactly one argument in CDR formula strings'
                 assert not ops, 'NN transforms cannot be dominated by ops'
@@ -857,37 +893,6 @@ class Formula(object):
                     impulses_by_name[new.name()] = new
 
                 terms.append([new])
-            elif t.func.id == "VarOnset":
-                assert len(t.args) == 2, "VarOnset terms take two arguments"
-                event_axis, expr = t.args
-
-                if not under_irf or under_interaction:
-                    raise NotImplementedError()
-
-                subterms = []
-                self.process_ast(
-                    expr,
-                    terms=subterms,
-                    has_intercept=has_intercept,
-                    rangf=rangf,
-                    impulses_by_name=impulses_by_name,
-                    interactions_by_name=interactions_by_name,
-                    under_irf=True,
-                    under_interaction=under_interaction
-                )
-                subterms = sum(subterms, [])
-                for s in subterms:
-                    assert isinstance(s, Impulse) or isinstance(s, ImpulseInteraction), 'Complex exprs not supported'
-
-                impulse = VarOnsetImpulse(event_axis.id, subterms)
-
-                # TODO what is this? copied from NN setup
-                if impulse.name() in impulses_by_name:
-                    impulse = impulses_by_name[impulse.name()]
-                else:
-                    impulses_by_name[impulse.name()] = impulse
-
-                terms.append([impulse])
             else:
                 # Unary transform
 
@@ -960,6 +965,7 @@ class Formula(object):
             t,
             input_irf,
             ops=None,
+            variable_onset=None,
             rangf=None,
             nn_inputs=None,
             impulses_by_name=None,
@@ -1086,7 +1092,7 @@ class Formula(object):
         inputs_to_drop = sum(inputs_to_drop, [])
 
         if isinstance(input_irf, IRFNode):
-            new = IRFNode(
+            kwargs = dict(
                 family=t.func.id,
                 irfID=irf_id,
                 ops=ops,
@@ -1100,6 +1106,11 @@ class Formula(object):
                 inputs_to_add=inputs_to_add,
                 inputs_to_drop=inputs_to_drop
             )
+            if variable_onset is None:
+                new = IRFNode(**kwargs)
+            else:
+                new = VariableOnsetIRFNode(event_axis=variable_onset,
+                                           **kwargs)
 
             new.add_child(input_irf)
 
@@ -1118,7 +1129,7 @@ class Formula(object):
             p.add_child(new)
 
         else:
-            new = IRFNode(
+            kwargs = dict(
                 family='Terminal',
                 impulse=input_irf,
                 coefID=coef_id,
@@ -1127,11 +1138,18 @@ class Formula(object):
                 param_init=param_init,
                 trainable=trainable
             )
+            if variable_onset is None:
+                new = IRFNode(**kwargs)
+            else:
+                new = VariableOnsetIRFNode(event_axis=variable_onset,
+                                           **kwargs)
 
+            # TODO(Cory) why nest IRFs?
             p = self.process_irf(
                 t,
                 input_irf=new,
                 rangf=rangf,
+                variable_onset=variable_onset,
                 nn_inputs=nn_inputs,
                 impulses_by_name=impulses_by_name,
                 interactions_by_name=interactions_by_name,
@@ -1439,7 +1457,7 @@ class Formula(object):
         X_var_columns = set(c for _X_var in X_var for c in _X_var.columns)
 
         for impulse in impulses:
-            if type(impulse).__name__ in ['ImpulseInteraction', 'VarOnsetImpulse']:
+            if type(impulse).__name__ == 'ImpulseInteraction':
                 to_process = impulse.impulses()
             else:
                 to_process = [impulse]
@@ -1790,7 +1808,6 @@ class Formula(object):
         :return: ``dict``; mapping from NN ``str`` id to ``NN`` object storing metadata for that NN.
         """
         nn_meta_by_key = self.t.nns_by_key()
-        import pdb; pdb.set_trace()
         nns_by_key = {}
 
         for key in nn_meta_by_key:
@@ -2894,7 +2911,8 @@ class IRFNode(object):
 
         return Formula.bases(self.family)
 
-    def impulses(self, include_interactions=False, include_nn=False, include_nn_inputs=True):
+    def impulses(self, include_interactions=False, include_nn=False, include_nn_inputs=True,
+                 include_variable_onset=False):
         """
         Get alphabetically sorted list of impulses dominated by node.
 
@@ -2908,7 +2926,8 @@ class IRFNode(object):
         impulses_by_name = self.impulses_by_name(
             include_interactions=include_interactions,
             include_nn=include_nn,
-            include_nn_inputs=include_nn_inputs
+            include_nn_inputs=include_nn_inputs,
+            include_variable_onset=include_variable_onset,
         )
 
         out = [impulses_by_name[x] for x in sorted(impulses_by_name.keys())]
@@ -2938,7 +2957,8 @@ class IRFNode(object):
 
         return out
 
-    def impulse_names(self, include_interactions=False, include_nn=False, include_nn_inputs=True):
+    def impulse_names(self, include_interactions=False, include_nn=False, include_nn_inputs=True,
+                      include_variable_onset=False):
         """
         Get list of names of impulses dominated by node.
 
@@ -2952,10 +2972,12 @@ class IRFNode(object):
         return sorted(self.impulses_by_name(
             include_interactions=include_interactions,
             include_nn=include_nn,
-            include_nn_inputs=include_nn_inputs
+            include_nn_inputs=include_nn_inputs,
+            include_variable_onset=include_variable_onset,
         ).keys())
 
-    def impulses_by_name(self, include_interactions=False, include_nn=False, include_nn_inputs=True):
+    def impulses_by_name(self, include_interactions=False, include_nn=False, include_nn_inputs=True,
+                         include_variable_onset=False):
         """
         Get dictionary mapping names of impulses dominated by node to their corresponding impulses.
 
@@ -2969,14 +2991,17 @@ class IRFNode(object):
         impulse_set = self.impulse_set(
             include_interactions=include_interactions,
             include_nn=include_nn,
-            include_nn_inputs=include_nn_inputs
+            include_nn_inputs=include_nn_inputs,
+            include_variable_onset=include_variable_onset,
         )
 
         out = {x.name(): x for x in impulse_set}
 
         return out
 
-    def impulse_set(self, include_interactions=False, include_nn=False, include_nn_inputs=True, out=None):
+    def impulse_set(self, include_interactions=False, include_nn=False,
+                    include_nn_inputs=True, include_variable_onset=False,
+                    out=None):
         """
         Get set of impulses dominated by node.
 
@@ -2990,6 +3015,9 @@ class IRFNode(object):
 
         if out is None:
             out = set()
+
+        if not include_variable_onset and isinstance(self, VariableOnsetIRFNode):
+            return out
 
         if self.terminal():
             if include_nn or not self.impulse.is_nn_impulse():
@@ -3012,10 +3040,14 @@ class IRFNode(object):
                             raise ValueError('Unsupported type "%s" for input to interaction' % type(response).__name__)
         else:
             for c in self.children:
+                if not include_variable_onset and isinstance(c, VariableOnsetIRFNode):
+                    continue
+
                 c.impulse_set(
                     include_interactions=include_interactions,
                     include_nn=include_nn,
                     include_nn_inputs=include_nn_inputs,
+                    include_variable_onset=include_variable_onset,
                     out=out
                 )
                 if self.family == 'NN':
@@ -3567,11 +3599,6 @@ class IRFNode(object):
                     )
                 ]
 
-            elif type(self.impulse).__name__ == "VarOnsetImpulse":
-                # TODO
-                expansion_map[self.impulse.name()] = [self.impulse]
-                new_impulses = expansion_map[self.impulse.name()]
-
             else:
                 if not self.impulse.name() in expansion_map and not isinstance(self.impulse, NNImpulse):
                     if self.impulse.categorical(X):
@@ -3836,3 +3863,15 @@ class IRFNode(object):
         for c in self.children:
             s += '\n%s' % indent + str(c).replace('\n', '\n%s' % indent)
         return s
+
+
+class VariableOnsetIRFNode(IRFNode):
+
+    def __init__(self, event_axis, **kwargs):
+        super().__init__(**kwargs)
+        self.event_axis = event_axis
+
+    # Always include variable-onset impulses.
+    def impulse_set(self, **kwargs):
+        kwargs["include_variable_onset"] = True
+        return super().impulse_set(**kwargs)

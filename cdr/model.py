@@ -436,7 +436,9 @@ class CDRModel(object):
         impulse_max = {}
         indicators = set()
         impulse_df_ix = []
+        var_impulse_df_ix = []
         impulse_blocks = {}
+        import pdb; pdb.set_trace()
         impulses = self.form.t.impulses(include_interactions=True)
 
         for impulse_ix, impulse in enumerate(impulses):
@@ -460,7 +462,7 @@ class CDRModel(object):
                     impulse_blocks[i] = {}
                 impulse_blocks[i]['rate'] = 1.
             else:
-                for i, df in enumerate(X + X_var + Y):
+                for i, df in enumerate(X + Y):
                     if name in df and not name.lower() == 'rate':
                         column = df[name].values
                         impulse_means[name] = np.nanmean(column)
@@ -516,6 +518,10 @@ class CDRModel(object):
                 raise ValueError('Impulse %s was not found in an input file.' % name)
 
             impulse_df_ix.append(i)
+
+        var_impulses = self.form.t.impulses(include_variable_onset=True)
+        print(var_impulses)
+        raise ValueError()
 
         stderr('\n')
 
@@ -787,7 +793,6 @@ class CDRModel(object):
         self.parametric_irf_terminals = [self.node_table[x] for x in self.terminal_names if self.node_table[x].p.family != 'NN']
         self.parametric_irf_terminal_names = [x.name() for x in self.parametric_irf_terminals]
 
-        import pdb; pdb.set_trace()
         self.nn_irf_ids = sorted([x for x in self.nns_by_id if self.nns_by_id[x].nn_type == 'irf'])
         self.nn_irf_preterminals = {}
         self.nn_irf_preterminal_names = {}
@@ -901,11 +906,14 @@ class CDRModel(object):
 
         # Initialize objects derived from training data stats
 
+        import pdb; pdb.set_trace()
         if self.impulse_df_ix is None:
             self.impulse_df_ix = np.zeros(len(self.impulse_names))
         self.impulse_df_ix = np.array(self.impulse_df_ix, dtype=self.INT_NP)
         self.impulse_df_ix_unique = sorted(list(set(self.impulse_df_ix)))
         self.n_impulse_df = len(self.impulse_df_ix_unique)
+
+        # Map from df idx -> impulse idx.
         self.impulse_indices = []
         for i in range(max(self.impulse_df_ix_unique) + 1):
             arange = np.arange(len(self.form.t.impulses(include_interactions=True)))
