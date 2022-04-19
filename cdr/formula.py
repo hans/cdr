@@ -104,7 +104,7 @@ def get_bool(k):
 class Formula(object):
     """
     A class for parsing R-style mixed-effects CDR model formula strings and applying them to CDR data matrices.
-    
+
     :param bform_str: ``str``; an R-style mixed-effects CDR model formula string
     """
 
@@ -857,6 +857,37 @@ class Formula(object):
                     impulses_by_name[new.name()] = new
 
                 terms.append([new])
+            elif t.func.id == "VarOnset":
+                assert len(t.args) == 2, "VarOnset terms take two arguments"
+                event_axis, expr = t.args
+
+                if not under_irf or under_interaction:
+                    raise NotImplementedError()
+
+                subterms = []
+                self.process_ast(
+                    expr,
+                    terms=subterms,
+                    has_intercept=has_intercept,
+                    rangf=rangf,
+                    impulses_by_name=impulses_by_name,
+                    interactions_by_name=interactions_by_name,
+                    under_irf=True,
+                    under_interaction=under_interaction
+                )
+                subterms = sum(subterms, [])
+                for s in subterms:
+                    assert isinstance(s, Impulse) or isinstance(s, ImpulseInteraction), 'Complex exprs not supported'
+
+                impulse = VarOnsetImpulse(event_axis.id, subterms)
+
+                # TODO what is this? copied from NN setup
+                if impulse.name() in impulses_by_name:
+                    impulse = impulses_by_name[impulse.name()]
+                else:
+                    impulses_by_name[impulse.name()] = impulse
+
+                terms.append([impulse])
             else:
                 # Unary transform
 
@@ -1353,7 +1384,7 @@ class Formula(object):
 
     def apply_formula(
             self,
-            X,
+            X, X_var,
             Y,
             X_in_Y_names=None,
             all_interactions=False,
@@ -1364,14 +1395,17 @@ class Formula(object):
 
         :param X: list of ``pandas`` tables; impulse data.
         :param Y: list of ``pandas`` tables; response data.
+        :param X_var: list of ``pandas`` tables; variable onset impulse data
         :param X_in_Y_names: ``list`` or ``None``; List of column names for response-aligned predictors (predictors measured for every response rather than for every input) if applicable, ``None`` otherwise.
         :param all_interactions: ``bool``; add powerset of all conformable interactions.
         :param series_ids: ``list`` of ``str`` or ``None``; list of ids to use as grouping factors for lagged effects. If ``None``, lagging will not be attempted.
-        :return: triple; transformed **X**, transformed **y**, response-aligned predictor names
+        :return: 4-tuple; transformed **X**, transformed **X_var**, transformed **y**, response-aligned predictor names
         """
 
         if not isinstance(X, list):
             X = [X]
+        if not isinstance(X_var, list):
+            X_var = [] if X_var is None else [X_var]
 
         for dv in self.dv_term:
             found = False
@@ -1401,13 +1435,11 @@ class Formula(object):
 
         impulses = sorted(list(set(impulses)), key=lambda x: x.name())
 
-        X_columns = set()
-        for _X in X:
-            for c in _X.columns:
-                X_columns.add(c)
+        X_columns = set(c for _X in X for c in _X.columns)
+        X_var_columns = set(c for _X_var in X_var for c in _X_var.columns)
 
         for impulse in impulses:
-            if type(impulse).__name__ == 'ImpulseInteraction':
+            if type(impulse).__name__ in ['ImpulseInteraction', 'VarOnsetImpulse']:
                 to_process = impulse.impulses()
             else:
                 to_process = [impulse]
@@ -1419,6 +1451,13 @@ class Formula(object):
                         if x.id in _X:
                             _X = self.apply_ops(x, _X)
                             X[i] = _X
+                            break
+                elif x.id in X_var_columns:
+                    for i in range(len(X_var)):
+                        _X_var = X_var[i]
+                        if x.id in _X_var:
+                            _X_var = self.apply_ops(x, _X_var)
+                            X_var[i] = _X_var
                             break
                 else: # Not in X, so either it's spilled over (legacy from Cognition expts) or it's in Y (response aligned)
                     sp = spillover.match(x.id)
@@ -1482,7 +1521,7 @@ class Formula(object):
                 if len(gf_s) > 1 and gf not in _Y:
                     _Y[gf] = _Y[gf_s].agg(lambda x: '_'.join([str(_x) for _x in x]), axis=1)
 
-        return X, Y, X_in_Y_names
+        return X, X_var, Y, X_in_Y_names
 
     def ablate_impulses(self, impulse_ids):
         """
@@ -1751,6 +1790,7 @@ class Formula(object):
         :return: ``dict``; mapping from NN ``str`` id to ``NN`` object storing metadata for that NN.
         """
         nn_meta_by_key = self.t.nns_by_key()
+        import pdb; pdb.set_trace()
         nns_by_key = {}
 
         for key in nn_meta_by_key:
@@ -1840,7 +1880,7 @@ class Impulse(object):
                 dtype = _X[self.id].dtype
                 if dtype.name == 'category' or not np.issubdtype(dtype, np.number):
                     return True
-        
+
         return False
 
     def expand_categorical(self, X):
@@ -1888,12 +1928,9 @@ class Impulse(object):
         return False
 
 
-class ImpulseInteraction(object):
+class CompoundImpulse(object):
     """
-    Data structure representing an interaction of impulse-aligned variables (impulses) in a CDR model.
-
-    :param impulses: ``list`` of ``Impulse``; impulses to interact.
-    :param ops: ``list`` of ``str``, or ``None``; ops to apply to interaction. If ``None``, no ops.
+    Abstract impulse which composes multiple child impulses.
     """
 
     def __init__(self, impulses, ops=None):
@@ -1903,17 +1940,17 @@ class ImpulseInteraction(object):
         self.atomic_impulses = []
         names = set()
         for x in impulses:
-            if isinstance(x, ImpulseInteraction):
+            if isinstance(x, CompoundImpulse):
                 for impulse in x.impulses():
                     names.add(impulse.name())
                     self.atomic_impulses.append(impulse)
             else:
                 names.add(x.name())
                 self.atomic_impulses.append(x)
-        self.name_str = ':'.join([x.name() for x in sorted(impulses, key=lambda x: x.name())])
-        for op in self.ops:
-            self.name_str = op + '(' + self.name_str + ')'
-        self.id = ':'.join([x.id for x in sorted(self.atomic_impulses, key=lambda x: x.id)])
+
+        args = ", ".join(str(x) for x in self.atomic_impulses)
+        self.name_str = f"CompoundImpulse({args})"
+        self.id = self.name_str
 
     def __str__(self):
         return self.name_str
@@ -1935,6 +1972,32 @@ class ImpulseInteraction(object):
         """
 
         return self.atomic_impulses[:]
+
+    def is_nn_impulse(self):
+        """
+        Type check for whether impulse represents an NN transformation of impulses.
+
+        :return: ``False``
+        """
+
+        return False
+
+
+class ImpulseInteraction(CompoundImpulse):
+    """
+    Data structure representing an interaction of impulse-aligned variables (impulses) in a CDR model.
+
+    :param impulses: ``list`` of ``Impulse``; impulses to interact.
+    :param ops: ``list`` of ``str``, or ``None``; ops to apply to interaction. If ``None``, no ops.
+    """
+
+    def __init__(self, impulses, ops=None):
+        super().__init__(impulses, ops=ops)
+
+        self.name_str = ':'.join([x.name() for x in sorted(impulses, key=lambda x: x.name())])
+        for op in self.ops:
+            self.name_str = op + '(' + self.name_str + ')'
+        self.id = ':'.join([x.id for x in sorted(self.atomic_impulses, key=lambda x: x.id)])
 
     def expand_categorical(self, X):
         """
@@ -1961,14 +2024,27 @@ class ImpulseInteraction(object):
 
         return X, expanded_interaction_impulses, expanded_atomic_impulses
 
-    def is_nn_impulse(self):
-        """
-        Type check for whether impulse represents an NN transformation of impulses.
 
-        :return: ``False``
-        """
+class VarOnsetImpulse(CompoundImpulse):
+    """
+    Data structure representing a variable-onset impulse in a CDR model.
 
-        return False
+    :param event_axis: ``str`` specifying the axis indexing variable events in dataset
+    :param impulses: ``list`` of ``Impulse``; impulses associated with variable onset
+    """
+
+    def __init__(self, event_axis, impulses):
+        super().__init__(impulses)
+
+        self.event_axis = event_axis
+
+        args = " + ".join(str(x) for x in self.impulses())
+        self.name_str = f"VarOnset({self.event_axis}, {args})"
+        self.ops = []
+        self.id = ":".join(x.id for x in sorted(self.impulses(), key=lambda x: x.id))
+
+    def expand_categorical(self, X):
+        raise NotImplementedError()
 
 
 class NNImpulse(object):
@@ -2821,7 +2897,7 @@ class IRFNode(object):
     def impulses(self, include_interactions=False, include_nn=False, include_nn_inputs=True):
         """
         Get alphabetically sorted list of impulses dominated by node.
-    
+
         :param include_interactions: ``bool``; whether to return impulses defined by interaction terms.
         :param include_nn: ``bool``; whether to return NN transformations of impulses.
         :param include_nn_inputs: ``bool``; whether to return input impulses to NN transformations.
@@ -2869,7 +2945,7 @@ class IRFNode(object):
         :param include_interactions: ``bool``; whether to return impulses defined by interaction terms.
         :param include_nn: ``bool``; whether to return NN transformations of impulses.
         :param include_nn_inputs: ``bool``; whether to return input impulses to NN transformations.
-       
+
         :return: ``list`` of ``str``; names of impulses dominated by node.
         """
 
@@ -3491,6 +3567,11 @@ class IRFNode(object):
                     )
                 ]
 
+            elif type(self.impulse).__name__ == "VarOnsetImpulse":
+                # TODO
+                expansion_map[self.impulse.name()] = [self.impulse]
+                new_impulses = expansion_map[self.impulse.name()]
+
             else:
                 if not self.impulse.name() in expansion_map and not isinstance(self.impulse, NNImpulse):
                     if self.impulse.categorical(X):
@@ -3755,4 +3836,3 @@ class IRFNode(object):
         for c in self.children:
             s += '\n%s' % indent + str(c).replace('\n', '\n%s' % indent)
         return s
-

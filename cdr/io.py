@@ -3,7 +3,7 @@ import pandas as pd
 
 from .util import stderr
 
-def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, sep=' ', verbose=True):
+def read_tabular_data(X_paths, X_var_paths, Y_paths, series_ids, categorical_columns=None, sep=' ', verbose=True):
     """
     Read impulse and response data into pandas dataframes and perform basic pre-processing.
 
@@ -18,12 +18,15 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
 
     if not isinstance(X_paths, list):
         X_paths = [X_paths]
+    if not isinstance(X_var_paths, list):
+        X_var_paths = [X_var_paths]
     if not isinstance(Y_paths, list):
         Y_paths = [Y_paths]
 
     if verbose:
         stderr('Loading data...\n')
     X = []
+    X_var = []
     Y = []
 
     for path in X_paths:
@@ -32,6 +35,12 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
             _X.append(pd.read_csv(x, sep=sep, skipinitialspace=True))
         X.append(_X)
 
+    for path in X_var_paths:
+        _X_var = []
+        for x in path.split(';'):
+            _X_var.append(pd.read_csv(x, sep=sep, skipinitialspace=True))
+        X_var.append(_X_var)
+
     for path in Y_paths:
         _Y = []
         for y in path.split(';'):
@@ -39,7 +48,7 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
         Y.append(_Y)
 
     # Regroup by column
-    
+
     # Stimuli
     X_new = []
     # Loop through datasets
@@ -52,7 +61,20 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
     # Loop through column files
     for x in X_new:
         X.append(pd.concat(x, axis=0))
-        
+
+    # Variable onset stimuli
+    X_var_new = []
+    # Loop through datasets
+    for i in range(len(X_var)):
+        for j in range(len(X_var[i])):
+            while j >= len(X_var_new):
+                X_var_new.append([])
+            X_var_new[j].append(X_var[i][j])
+    X_var = []
+    # Loop through column files
+    for x in X_var_new:
+        X_var.append(pd.concat(x, axis=0))
+
     # Responses
     Y_new = []
     # Loop through datasets
@@ -72,6 +94,9 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
         stderr('Ensuring sort order...\n')
     for i, x in enumerate(X):
         X[i] = x.sort_values(series_ids + ['time']).reset_index(drop=True)
+    for i, x in enumerate(X_var):
+        # TODO ensure sort order of event axis?
+        X_var[i] = x.sort_values(series_ids).reset_index(drop=True)
     for i, y in enumerate(Y):
         Y[i] = y.sort_values(series_ids + ['time']).reset_index(drop=True)
 
@@ -83,6 +108,9 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
                 for _X in X:
                     if col in _X:
                         _X[col] = _X[col].astype('category')
+                for _X_var in X_var:
+                    if col in _X_var:
+                        _X_var[col] = _X_var[col].astype('category')
                 for _Y in Y:
                     if col in _Y:
                         _Y[col] = _Y[col].astype('category')
@@ -98,4 +126,4 @@ def read_tabular_data(X_paths, Y_paths, series_ids, categorical_columns=None, se
             else:
                 _X['trial'] = _X.rate.cumsum()
 
-    return X, Y
+    return X, X_var, Y

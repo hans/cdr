@@ -86,7 +86,7 @@ def LogNormalV2(loc, scale, epsilon=1e-5, **kwargs):
     Initilize a LogNormal distribution parameterized by its mean and standard deviation,
     rather than the more common parameterization by the mean and standard deviation of
     the underlying normal distribution.
-    
+
     :param loc: TF tensor; mean.
     :param scale: TF tensor; standard deviation
     :param epsilon: ``float``; stabilizing constant
@@ -290,7 +290,7 @@ class CDRModel(object):
         }
     }
 
-    def __init__(self, form, X, Y, ablated=None, build=True, **kwargs):
+    def __init__(self, form, X, X_var, Y, ablated=None, build=True, **kwargs):
         super(CDRModel, self).__init__()
 
         ## Store initialization settings
@@ -303,6 +303,8 @@ class CDRModel(object):
 
         if not isinstance(X, list):
             X = [X]
+        if not isinstance(X_var, list):
+            X_var = [X_var]
         if not isinstance(Y, list):
             Y = [Y]
 
@@ -458,7 +460,7 @@ class CDRModel(object):
                     impulse_blocks[i] = {}
                 impulse_blocks[i]['rate'] = 1.
             else:
-                for i, df in enumerate(X + Y):
+                for i, df in enumerate(X + X_var + Y):
                     if name in df and not name.lower() == 'rate':
                         column = df[name].values
                         impulse_means[name] = np.nanmean(column)
@@ -481,10 +483,11 @@ class CDRModel(object):
 
                         found = True
                         break
-                    elif is_interaction:
+                    elif isinstance(impulse, CompoundImpulse):
                         found = True
                         impulse_names = [x.name() for x in impulse.impulses()]
                         for x in impulse.impulses():
+                            print(x.name(), x.name() in df)
                             if not x.name() in df:
                                 found = False
                                 break
@@ -508,6 +511,7 @@ class CDRModel(object):
                             if self._vector_is_indicator(column):
                                 indicators.add(name)
                             break
+
             if not found:
                 raise ValueError('Impulse %s was not found in an input file.' % name)
 
@@ -783,6 +787,7 @@ class CDRModel(object):
         self.parametric_irf_terminals = [self.node_table[x] for x in self.terminal_names if self.node_table[x].p.family != 'NN']
         self.parametric_irf_terminal_names = [x.name() for x in self.parametric_irf_terminals]
 
+        import pdb; pdb.set_trace()
         self.nn_irf_ids = sorted([x for x in self.nns_by_id if self.nns_by_id[x].nn_type == 'irf'])
         self.nn_irf_preterminals = {}
         self.nn_irf_preterminal_names = {}
@@ -918,7 +923,7 @@ class CDRModel(object):
             cov=self.impulse_cov,
             allow_singular=True
         )
-        
+
         impulse_dfs_noninteraction = set()
         terminal_names = [x for x in self.terminal_names if self.node_table[x].p.family == 'NN']
         for x in terminal_names:
@@ -1119,7 +1124,7 @@ class CDRModel(object):
                     self.check_convergence = False
 
         self.predict_mode = False
-        
+
     def _initialize_nn_metadata(self):
         self.nn_meta = {}
         nn_ids = [None] + list(self.nns_by_id.keys())
@@ -1886,7 +1891,7 @@ class CDRModel(object):
             param_kwargs.append(_param_kwargs)
 
         return param_names, param_kwargs
-    
+
     def _get_irf_param_metadata(self, param_name, family, lb=None, ub=None, default=0.):
         irf_ids = self.atomic_irf_names_by_family[family]
         param_init = self.atomic_irf_param_init_by_family[family]
@@ -4176,7 +4181,7 @@ class CDRModel(object):
                             nn_impulse_inputs = tf.gather(nn_impulse_inputs, nn_impulse_input_ix, axis=1)
                             nn_impulse_inputs = nn_impulse_inputs[..., None, None]
                             inputs_cur.append(nn_impulse_inputs)
-                                
+
                         if len(dirac_delta_input_names):
                             dd_key = tuple(dirac_delta_input_names)
                             if dd_key not in dd:
@@ -4256,7 +4261,7 @@ class CDRModel(object):
                 if irf_impulses is not None:
                     terminal_ix = names2ix(self.terminal_names, terminal_names)
                     irf_impulses = tf.gather(irf_impulses, terminal_ix, axis=2)
-                
+
                 self.irf_impulses = irf_impulses
 
     def _compile_X_weighted_by_irf(self):
@@ -4404,7 +4409,7 @@ class CDRModel(object):
                     pred_dist_fn = self.get_response_dist(response)
                     response_param_names = self.get_response_params(response)
                     response_params = self.intercept[response] # (batch, param, dim)
-                    
+
                     response_dist_kwargs = {}
                     if self.get_response_dist_name(response) == 'lognormalv2':
                         response_dist_kwargs['epsilon'] = self.pred_dist_epsilon
@@ -5456,7 +5461,7 @@ class CDRModel(object):
 
                         start_ix = int(self.convergence_n_iterates / self.convergence_stride) - int((cur_step - 1) / self.convergence_stride) - 1
                         start_ix = max(0, start_ix)
-                        
+
                         twotailed = not self.early_stopping
 
                         for i in range(len(var_d0_iterates)):
@@ -8923,10 +8928,10 @@ class CDRModel(object):
                     'tile_3d': None
                 }
                 params = [xdict]
-                
+
                 if is_3d:
                     xdict['tile_3d'] = [1, yres, 1]
-                    
+
                     ydict = {
                         'axis_var': yvar,
                         'axis': yaxis,
@@ -9034,7 +9039,7 @@ class CDRModel(object):
                             t_delta_base = np.tile(t_delta_base, tile_3d).reshape((T, 1, max(n_impulse, 1)))
                         if ref_varies:
                             t_delta_ref = t_delta_base
-    
+
                     assert plot_axis is not None, 'Unrecognized value for axis variable: "%s"' % axis_var
 
                 gf_y_base = np.tile(gf_y_ref, (T, 1))

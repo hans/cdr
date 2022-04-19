@@ -56,17 +56,18 @@ if __name__ == '__main__':
     partitions = get_partition_list('train')
     all_interactions = False
 
-    X_paths, Y_paths = paths_from_partition_cliarg(partitions, p)
+    X_paths, X_var_paths, Y_paths = paths_from_partition_cliarg(partitions, p)
     X_paths_dev = Y_paths_dev = X_dev = Y_dev = None
-    X, Y = read_tabular_data(
+    X, X_var, Y = read_tabular_data(
         X_paths,
+        X_var_paths,
         Y_paths,
         p.series_ids,
         sep=p.sep,
         categorical_columns=list(set(p.split_ids + p.series_ids + [v for x in cdr_formula_list for v in x.rangf]))
     )
-    X, Y, select, X_in_Y_names = preprocess_data(
-        X,
+    X, X_var, Y, select, X_in_Y_names = preprocess_data(
+        X, X_var,
         Y,
         cdr_formula_list,
         p.series_ids,
@@ -250,7 +251,7 @@ if __name__ == '__main__':
 
             cdr_model = CDRModel(
                 formula,
-                X,
+                X, X_var,
                 Y_valid,
                 ablated=p['ablated'],
                 outdir=p.outdir + '/' + m_path,
@@ -318,4 +319,3 @@ if __name__ == '__main__':
             stderr('\n\n')
 
             cdr_model.finalize()
-

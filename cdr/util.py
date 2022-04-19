@@ -281,12 +281,19 @@ def get_partition_list(partition):
 def paths_from_partition_cliarg(partition, config):
     partition = get_partition_list(partition)
     X_paths = []
+    X_var_paths = []
     y_paths = []
 
     X_map = {
         'train': config.X_train,
         'dev': config.X_dev,
         'test': config.X_test
+    }
+
+    X_var_map = {
+        'train': config.X_var_train,
+        'dev': config.X_var_dev,
+        'test': config.X_var_test
     }
 
     Y_map = {
@@ -297,14 +304,17 @@ def paths_from_partition_cliarg(partition, config):
 
     for p in partition:
         X_path = X_map[p]
+        X_var_path = X_var_map[p]
         y_path = Y_map[p]
 
         if X_path not in X_paths:
             X_paths.append(X_path)
+        if X_var_path not in X_var_paths:
+            X_var_paths.append(X_var_path)
         if y_path not in y_paths:
             y_paths.append(y_path)
 
-    return X_paths, y_paths
+    return X_paths, X_var_paths, y_paths
 
 
 def get_irf_name(x, irf_name_map):

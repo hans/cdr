@@ -50,6 +50,10 @@ class Config(object):
         self.X_dev = data.get('X_dev', None)
         self.X_test = data.get('X_test', None)
 
+        self.X_var_train = data.get('X_var_train')
+        self.X_var_dev = data.get('X_var_dev', None)
+        self.X_var_test = data.get('X_var_test', None)
+
         self.Y_train = data.get('Y_train', data.get('y_train', None))
         assert self.Y_train, 'Y_train must be provided'
         self.Y_dev = data.get('Y_dev', data.get('y_dev', None))

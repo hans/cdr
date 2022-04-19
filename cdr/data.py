@@ -207,7 +207,7 @@ def filter_invalid_responses(Y, dv, crossval_factor=None, crossval_fold=None):
     if df_in:
         Y = Y[0]
         select_Y_valid = select_Y_valid[0]
-    
+
     return Y, select_Y_valid
 
 
@@ -908,6 +908,7 @@ def compute_time_mask(
 
 def preprocess_data(
         X,
+        X_var,
         Y,
         formula_list,
         series_ids,
@@ -941,6 +942,8 @@ def preprocess_data(
 
     if not isinstance(X, list):
         X = [X]
+    if not isinstance(X_var, list):
+        X_var = [X_var]
     if not isinstance(Y, list):
         Y = [Y]
 
@@ -1011,13 +1014,13 @@ def preprocess_data(
                         print('Last ix')
                         print(last_obs[k])
                         print('Target:')
-                        print(_Y[['subject', 'docid', 'word', 'time', 'first_obs_%d' % i, 'last_obs_%d' % i]].iloc[max(0, k-5):k+5])
+                        print(_Y[['time', 'first_obs_%d' % i, 'last_obs_%d' % i]].iloc[max(0, k-5):k+5])
                         print('Impulses:')
-                        print(_X[['subject', 'docid', 'word', 'time']][row['first_obs_%d' % i]:row['last_obs_%d' % i]])
+                        print(_X[['word_idx', 'phon_idx', 'time']][row['first_obs_%d' % i]:row['last_obs_%d' % i]])
                         print('Impulses (bw):')
-                        print(_X[['subject', 'docid', 'word', 'time']][first_obs_b[k]:last_obs_b[k]])
+                        print(_X[['word_idx', 'phon_idx', 'time']][first_obs_b[k]:last_obs_b[k]])
                         print('Impulses (fw):')
-                        print(_X[['subject', 'docid', 'word', 'time']][first_obs_f[k]:last_obs_f[k]])
+                        print(_X[['word_idx', 'phon_idx', 'time']][first_obs_f[k]:last_obs_f[k]])
                         print()
 
                 Y[j] = _Y
@@ -1025,8 +1028,8 @@ def preprocess_data(
             X_new.append(_X)
 
         for x in formula_list:
-            X_new, Y, X_in_Y_names = x.apply_formula(
-                X_new,
+            X_new, X_var, Y, X_in_Y_names = x.apply_formula(
+                X_new, X_var,
                 Y,
                 X_in_Y_names=X_in_Y_names,
                 all_interactions=all_interactions,
@@ -1035,7 +1038,7 @@ def preprocess_data(
     else:
         X_new = X
 
-    return X_new, Y, select, X_in_Y_names
+    return X_new, X_var, Y, select, X_in_Y_names
 
 
 def split_cdr_outputs(outputs, lengths):
