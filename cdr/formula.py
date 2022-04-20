@@ -735,7 +735,7 @@ class Formula(object):
                 terms.append(new_subterms)
             elif t.func.id == "CVarOnset":
                 assert not under_irf
-                assert len(t.args) == 3, "CVarOnset terms take two arguments"
+                assert len(t.args) == 3, "CVarOnset terms take three arguments"
                 event_axis, expr, irf_family = t.args
                 event_axis = event_axis.id
 
@@ -1688,12 +1688,31 @@ class Formula(object):
             fixed = terms.pop(None)
             new_terms = {}
             for term in fixed:
-                if (term['irf'], term['nn_key']) in new_terms:
-                    new_terms[(term['irf'], term['nn_key'])]['impulses'] += term['impulses']
+                key = (term['irf'], term['nn_key'], term['irf_type'])
+                if key in new_terms:
+                    new_terms[key]['impulses'] += term['impulses']
                 else:
-                    new_terms[(term['irf'], term['nn_key'])] = term
+                    new_terms[key] = term
             new_terms = [new_terms[x] for x in sorted(list(new_terms.keys()), key=lambda x: x[0])]
-            term_strings.append(' + '.join(['C(%s, %s)' %(' + '.join([x.name() for x in y['impulses']]), y['irf']) for y in new_terms]))
+
+            term_string_els = []
+            for y in new_terms:
+                if y['irf_type'] == 'CVarOnset':
+                    term_string_els.append(
+                        "%s(%s, %s, %s)" %
+                        (y['irf_type'],
+                         y['event_axis'],
+                         ' + '.join([x.name() for x in y['impulses']]),
+                         y['irf'])
+                    )
+                else:
+                    term_string_els.append(
+                        '%s(%s, %s)' %
+                        (y['irf_type'],
+                         ' + '.join([x.name() for x in y['impulses']]),
+                         y['irf'])
+                    )
+            term_strings.append(' + '.join(term_string_els))
 
             for x in t.interactions():
                 if None in x.rangf:
@@ -1701,7 +1720,7 @@ class Formula(object):
                     for y in x.atomic_responses:
                         if isinstance(y, IRFNode):
                             irf = y.irf_to_formula(None)
-                            new_term_string = 'C(%s' % y.impulse.name() + ', ' + irf + ')'
+                            new_term_string = f'{y.irf_type()}({y.impulse.name()}, {irf})'
                         else:
                             new_term_string = y.name()
                         subterm_strings.append(new_term_string)
@@ -1727,13 +1746,17 @@ class Formula(object):
                     for y in x.atomic_responses:
                         if isinstance(y, IRFNode):
                             irf = y.irf_to_formula(rangf)
-                            new_term_string = 'C(%s' % y.impulse.name() + ', ' + irf + ')'
+                            new_term_string = f'{y.irf_type()}({y.impulse.name()}, {irf})'
                         else:
                             new_term_string = y.name()
                         subterm_strings.append(new_term_string)
                     interactions_str += ' + ' + ':'.join(subterm_strings)
 
-            new_terms_str += ' + '.join(['C(%s, %s)' % (' + '.join([x.name() for x in y['impulses']]), y['irf']) for y in new_terms]) + interactions_str + ' | %s)' %rangf
+            new_terms_str += ' + '.join([
+                '%s(%s, %s)' % (y['irf_type'],
+                                ' + '.join([x.name() for x in y['impulses']]),
+                                y['irf'])
+                for y in new_terms]) + interactions_str + ' | %s)' %rangf
             term_strings.append(new_terms_str)
 
         ran_intercepts = []
@@ -2572,7 +2595,6 @@ class IRFNode(object):
         :param t: ``IRFNode``; child node.
         :return: ``IRFNode``; child node with updated parent.
         """
-
         if self.terminal():
             raise ValueError('Tried to add child to terminal IRFNode')
         child_names = [c.local_name() for c in self.children]
@@ -3659,19 +3681,7 @@ class IRFNode(object):
                 c_children = [x for x in c.categorical_transform(X, expansion_map=expansion_map)]
                 children += c_children
             for c in children:
-                new_irf = IRFNode(
-                    family=self.family,
-                    irfID=self.irfID,
-                    fixed=self.fixed,
-                    rangf=self.rangf,
-                    nn_impulses=self.nn_impulses,
-                    nn_config=self.nn_config,
-                    impulses_as_inputs=self.impulses_as_inputs,
-                    inputs_to_add=self.inputs_added,
-                    inputs_to_drop=self.inputs_dropped,
-                    param_init=self.param_init,
-                    trainable=self.trainable
-                )
+                new_irf = self.__class__(**self.serial_properties)
                 new_irf.add_child(c)
                 self_transformed.append(new_irf)
 
@@ -3807,6 +3817,9 @@ class IRFNode(object):
                         new_children.append(c)
             self.children = new_children
 
+    def irf_type(self):
+        return "C"
+
     def formula_terms(self):
         """
         Return data structure representing formula terms dominated by node, grouped by random grouping factor.
@@ -3845,10 +3858,31 @@ class IRFNode(object):
         if self.family is not None:
             for key in out:
                 for term in out[key]:
+                    term['irf_type'] = self.irf_type()
                     term['irf'] = self.irf_to_formula(rangf=key)
                     term['nn_key'] = self.nn_key
 
         return out
+
+    @property
+    def serial_properties(self):
+        """
+        Return a dict of properties which can be used to re-instantiate
+        this IRF node, e.g. after categorical expansion.
+        """
+        return dict(
+            family=self.family,
+            irfID=self.irfID,
+            fixed=self.fixed,
+            rangf=self.rangf,
+            nn_impulses=self.nn_impulses,
+            nn_config=self.nn_config,
+            impulses_as_inputs=self.impulses_as_inputs,
+            inputs_to_add=self.inputs_added,
+            inputs_to_drop=self.inputs_dropped,
+            param_init=self.param_init,
+            trainable=self.trainable
+        )
 
     def __str__(self):
         s = self.name()
@@ -3871,7 +3905,24 @@ class VariableOnsetIRFNode(IRFNode):
         super().__init__(**kwargs)
         self.event_axis = event_axis
 
+    def irf_type(self):
+        return "CVarOnset"
+
+    def formula_terms(self):
+        out = super().formula_terms()
+        for key in out:
+            for term in out[key]:
+                term['event_axis'] = self.event_axis
+
+        return out
+
     # Always include variable-onset impulses.
     def impulse_set(self, **kwargs):
         kwargs["include_variable_onset"] = True
         return super().impulse_set(**kwargs)
+
+    @property
+    def serial_properties(self):
+        ret = super().serial_properties
+        ret["event_axis"] = self.event_axis
+        return ret

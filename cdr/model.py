@@ -438,7 +438,6 @@ class CDRModel(object):
         impulse_df_ix = []
         var_impulse_df_ix = []
         impulse_blocks = {}
-        import pdb; pdb.set_trace()
         impulses = self.form.t.impulses(include_interactions=True)
 
         for impulse_ix, impulse in enumerate(impulses):
@@ -519,7 +518,10 @@ class CDRModel(object):
 
             impulse_df_ix.append(i)
 
-        var_impulses = self.form.t.impulses(include_variable_onset=True)
+        var_impulses = [i
+                        for irf in self.form.t.children
+                        for i in irf.impulses(include_variable_onset=True)
+                        if isinstance(irf, VariableOnsetIRFNode)]
         print(var_impulses)
         raise ValueError()
 
